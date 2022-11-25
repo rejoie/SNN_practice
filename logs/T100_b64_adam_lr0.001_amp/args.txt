@@ -1,0 +1,2 @@
+Namespace(T=100, amp=True, b=64, data_dir='./datasets', device='cuda:0', epochs=100, j=8, lr=0.001, momentum=0.9, opt='adam', out_dir='./logs', resume=None, tau=2.0)
+/home/tanghao/code/SNN_practice/spikingjelly/activation_based/examples/lif_fc_mnist.py -tau 2.0 -T 100 -device cuda:0 -b 64 -epochs 100 -data-dir ./datasets -amp -opt adam -lr 1e-3 -j 8
