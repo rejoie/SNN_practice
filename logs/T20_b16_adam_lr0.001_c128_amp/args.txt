@@ -1,0 +1,2 @@
+Namespace(T=20, amp=True, b=16, channels=128, cupy=False, data_dir='/data/tanghao/datasets/DVS128Gesture/', device='cuda:7', epochs=64, j=8, lr=0.001, momentum=0.9, opt='adam', out_dir='./logs', resume=None)
+/home/tanghao/code/SNN_practice/spikingjelly/activation_based/examples/classify_dvsg.py -T 20 -device cuda:7 -b 16 -epochs 64 -data-dir /data/tanghao/datasets/DVS128Gesture/ -amp -opt adam -lr 0.001 -j 8
