@@ -64,17 +64,14 @@ def f_pre(x, w_min, alpha=0.):
 def f_post(x, w_max, alpha=0.):
     return (w_max - x) ** alpha
 
-def trace_update(fc,SpikingNeuron,in_linear ,in_spike: torch.Tensor, out_spike: torch.Tensor, tau_pre: float, tau_post: float):
+def trace_update(SpikingNeuron,in_spike: torch.Tensor, out_spike: torch.Tensor, tau_pre: float, tau_post: float):
     if SpikingNeuron.trace_pre is None:
         # print('input:',in_spike)
         SpikingNeuron.trace_pre = torch.zeros_like(in_spike)
-        fc.trace_pre = torch.zeros_like(in_spike)
 
     if SpikingNeuron.trace_post is None:
         SpikingNeuron.trace_post = torch.zeros_like(out_spike)
 
-    if fc.trace is None:
-        fc.trace = torch.zeros_like(in_linear)
 
     # SpikingNeuron.trace_pre = SpikingNeuron.trace_pre - SpikingNeuron.trace_pre / \
     #     tau_pre + in_spike      # shape = [batch_size, N_in]
@@ -82,28 +79,27 @@ def trace_update(fc,SpikingNeuron,in_linear ,in_spike: torch.Tensor, out_spike: 
     #     SpikingNeuron.trace_post / tau_post + \
     #     out_spike  # shape = [batch_size, N_out]
 
-    fc.trace = fc.trace - fc.trace / fc.tau + in_linear      # shape = [batch_size, N_in]
-    SpikingNeuron.trace_post = SpikingNeuron.trace_post - \
-        SpikingNeuron.trace_post / tau_post + \
-        out_spike  # shape = [batch_size, N_out]
+    SpikingNeuron.trace_pre = SpikingNeuron.trace_pre - SpikingNeuron.trace_pre / tau_pre + in_spike      # shape = [batch_size, N_in]
+    SpikingNeuron.trace_post = SpikingNeuron.trace_post - SpikingNeuron.trace_post / tau_post + out_spike  # shape = [batch_size, N_out]
+
 
 
 
 
 def stdp_grad(
-    weight: nn.Linear, in_spike: torch.Tensor, out_spike: torch.Tensor,
+    weight, in_spike: torch.Tensor, out_spike: torch.Tensor,
     trace_pre: Union[float, torch.Tensor, None],
     trace_post: Union[float, torch.Tensor, None],
     w_min: float, w_max: float,
     f_pre: Callable = lambda x: x, f_post: Callable = lambda x: x
-):
+):#: nn.Linear
     
 
     # [batch_size, N_out, N_in] -> [N_out, N_in]
     # 此处对照更新公式，使用unsqueeze添加更新公式中所缺失的一维
-    print(trace_pre.shape,trace_post.shape,weight.shape,trace_pre.unsqueeze(1).shape)
+    # print(trace_pre.shape,trace_post.shape,weight.shape,trace_pre.unsqueeze(1).shape)
     # [200, 784] [200, 10] [10, 784] [200, 1, 784]
-    # torch.Size([200, 10]) torch.Size([200, 10]) torch.Size([10, 784]) torch.Size([200, 1, 10])
+    # torch.Size([200, 784]) torch.Size([200, 10]) torch.Size([10, 784]) torch.Size([200, 1, 784])
     # trace_pre shape = [batch_size, N_in] = [200, 784]
     # trace_post shape = [batch_size, N_out] = [200, 10]
     # in_spike shape = [batch_size, N_in] = [200, 784]
@@ -115,24 +111,25 @@ def stdp_grad(
 class ActFun(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx,in_linear ,input,fc,SpikingNeuron,tau_pre,tau_post, w_min, w_max, f_pre, f_post):
+    def forward(ctx,input,fc,SpikingNeuron,tau_pre,tau_post, w_min, w_max, f_pre, f_post):
+        in_spike=fc(input)
         if SpikingNeuron.v is None:
-            SpikingNeuron.v = torch.zeros_like(input)
-            SpikingNeuron.s = torch.zeros_like(input)
-        SpikingNeuron.v = SpikingNeuron.v + \
-            (1.0 - SpikingNeuron.v) / SpikingNeuron.tau * input
-        spike = (SpikingNeuron.v >= SpikingNeuron.v_threshold).to(input)
+            SpikingNeuron.v = torch.zeros_like(in_spike)
+            SpikingNeuron.s = torch.zeros_like(in_spike)
+
+        SpikingNeuron.v = SpikingNeuron.v + (-SpikingNeuron.v+in_spike) / tau_post# todo: 此处的tau
+        spike = SpikingNeuron.v.ge(SpikingNeuron.v_threshold).to(SpikingNeuron.v)
+        # SpikingNeuron.v = SpikingNeuron.v + \
+        #     (1.0 - SpikingNeuron.s) / tau_post * in_spike# todo: 此处的tau
+        # spike = (SpikingNeuron.v >= SpikingNeuron.v_threshold).to(in_spike)
         if SpikingNeuron.soft_reset:
             SpikingNeuron.v = SpikingNeuron.v-SpikingNeuron.v_threshold*spike
         else:
-            SpikingNeuron.v = SpikingNeuron.v * \
-                (1-spike) + SpikingNeuron.v_reset * spike
+            SpikingNeuron.v = SpikingNeuron.v * (1-spike) + SpikingNeuron.v_reset * spike
 
-        spike = SpikingNeuron.v.ge(
-            SpikingNeuron.v_threshold).to(SpikingNeuron.v)
         
-        trace_update(fc,SpikingNeuron,in_linear ,input, spike, tau_pre, tau_post)# todo: 需要考察一下trace_pre到底是linuear层的输出还是lif层的输入 fc.trace
-        ctx.save_for_backward(fc.weight.data,in_linear, spike,fc.trace,SpikingNeuron.trace_post)#SpikingNeuron.trace_pre
+        trace_update(SpikingNeuron ,input, spike, tau_pre, tau_post)# todo: 需要考察一下trace_pre到底是linuear层的输出还是lif层的输入 fc.trace
+        ctx.save_for_backward(fc.weight.data,input, spike,SpikingNeuron.trace_pre,SpikingNeuron.trace_post)#
 
         ctx.w_min = w_min
         ctx.w_max = w_max
@@ -146,22 +143,16 @@ class ActFun(torch.autograd.Function):
     def backward(ctx, grad_output):
         weight,input, output,trace_pre,trace_post = ctx.saved_tensors
         # grad_input = grad_output.clone()
-        return grad_output * stdp_grad(weight, input, output,trace_pre, trace_post, ctx.w_min, ctx.w_max, ctx.f_pre, ctx.f_post)
+        # grad_output.shape=[200, 10], stdp_grad.shape=[10, 784]
+        print(grad_output.shape, stdp_grad(weight, input, output,trace_pre, trace_post, ctx.w_min, ctx.w_max, ctx.f_pre, ctx.f_post).shape)
+        return grad_output*stdp_grad(weight, input, output,trace_pre, trace_post, ctx.w_min, ctx.w_max, ctx.f_pre, ctx.f_post)
 
-
-class Linear(nn.Linear):
-    def __init__(self, in_features, out_features, bias=True,tau=2.):
-        super(Linear, self).__init__(in_features, out_features, bias)
-        self.tau = tau
-        self.trace = None
-
-    def reset(self):
-        self.trace = None
 
 class Linear_Spiking(nn.Module):
-    def __init__(self, in_feature, out_feature, f_pre, f_post, tau=2.0, tau_pre=2.0, v_threshold=1.0, v_reset=0.0, soft_reset=True, w_min=-1.0, w_max=1.0):
+    def __init__(self, in_feature, out_feature, f_pre, f_post, tau_pre=2.0, tau_post=2.0, v_threshold=1.0, v_reset=0.0, soft_reset=True, w_min=-1.0, w_max=1.0):
         super(Linear_Spiking, self).__init__()
-        self.tau = tau
+        self.tau_pre = tau_pre
+        self.tau_post = tau_post
         self.v = None
         self.s = None
         self.v_threshold = v_threshold
@@ -173,39 +164,31 @@ class Linear_Spiking(nn.Module):
         self.w_max = w_max
         self.f_pre = f_pre
         self.f_post = f_post
-        self.flatten = nn.Flatten()
-        self.linear = Linear(in_feature, out_feature, bias=False, tau=tau_pre)
+        self.linear = nn.Linear(in_feature, out_feature, bias=False)
         # self.lif=LIFNeuron(tau=tau, v_threshold=v_threshold, v_reset=v_reset, soft_reset=soft_reset)
 
     def reset(self):
-        self.linear.reset()
         self.v = None
         self.s = None
         self.trace_pre = None
         self.trace_post = None
 
     def forward(self, x):
-        y = self.flatten(x)
         self.linear.weight.data.clamp_(self.w_min, self.w_max)
-        in_spike = self.linear(y)
-        # print(input.shape)
-        # if self.v is None:
-        #     self.v = torch.zeros_like(input)
-        #     self.s = torch.zeros_like(input)
-        # self.v = self.v + (1.0 - self.v) / self.tau * input
-        # spike = (self.v >= self.v_threshold).to(input)
-        # if self.soft_reset:
-        #     self.v = self.v-self.v_threshold*spike
-        # else:
-        #     self.v = self.v * (1-spike) + self.v_reset * spike
-        # (ctx, input,fc,SpikingNeuron,tau_pre,tau_post, w_min, w_max, f_pre, f_post)
-        spike = ActFun.apply(y,in_spike, self.linear, self, self.linear.tau,
-                             self.tau, self.w_min, self.w_max, self.f_pre, self.f_post)
+        # (ctx,input,fc,SpikingNeuron,tau_pre,tau_post, w_min, w_max, f_pre, f_post)
+        spike = ActFun.apply(x, self.linear, self, self.tau_pre, self.tau_post, self.w_min, self.w_max, self.f_pre, self.f_post)
 
         return spike
 
 
-model=Linear_Spiking(784,10,f_pre, f_post)
+
+model=nn.Sequential(
+    nn.Flatten(),
+    Linear_Spiking(784,10,f_pre, f_post)
+)
+# if args.opt == 'adam':
+optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+model=model.to(args.device)
 # if args.opt == 'adam':
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 model=model.to(args.device)
